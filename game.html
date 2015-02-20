@@ -1,0 +1,729 @@
+<!doctype html>
+<html>
+<head>
+<title>Canvas Demo - AI</title>
+<style>
+.modalDialog
+{
+position: fixed;
+font-family: Arial, Helvetica, sans-serif;
+text-align: center;
+vertical-align: middle;
+line-height: 90px;
+top: 0;
+right: 0;
+bottom: 0;
+left: 0;
+background: rgba(0,0,0,0.8);
+z-index: 99999;
+-webkit-transition: opacity 400ms ease-in;
+-moz-transition: opacity 400ms ease-in;
+transition: opacity 400ms ease-in;
+display: none;
+pointer-events: none;
+}
+
+.modalDialog:target 
+{
+display: block;
+pointer-events: auto;
+}
+
+.modalDialog > div 
+{
+width: 300px;
+position: relative;
+/*margin: 10% auto;*/
+margin: 10px 100px 10px 100px;
+border-radius: 10px;
+background: #fff;
+background: -moz-linear-gradient(#fff, #999);
+background: -webkit-linear-gradient(#fff, #999);
+background: -o-linear-gradient(#fff, #999);
+}
+
+</style>
+</head>
+<body>
+
+<canvas id="canvas" style="border:1px solid #000"></canvas><br />
+
+<label id="lblDebugGrounded"></label><br />
+<label id="lblDebugCollision"></label><br />
+<label id="lblDebugVelocityX"></label><br />
+<label id="lblDebugVelocityY"></label><br />
+<label id="lblDebugPosX"></label><br />
+<label id="lblDebugPosY"></label><br />
+<label id="lblDebug"></label><br /><br />
+
+<label id="lblDebugEnemyCanSeeMe"></label><br /><br />
+
+<div id="openModal" class="modalDialog">
+	<div>
+		<h3>PAUSED</h3>
+	</div>
+</div>
+
+<script>
+
+(function () {
+	// Draw everything:
+    var requestAnimationFrame = window.requestAnimationFrame || window.mozRequestAnimationFrame || window.webkitRequestAnimationFrame || window.msRequestAnimationFrame;
+    window.requestAnimationFrame = requestAnimationFrame;
+})();
+function clearDebugMessage() {
+	document.getElementById('lblDebug').innerHTML = "";
+}
+function addDebugMessage(msg) {
+	document.getElementById('lblDebug').innerHTML += msg + "<br />";
+}
+function setDebugGrounded(isGrounded) {
+	document.getElementById('lblDebugGrounded').innerHTML = (isGrounded) ? "Grounded: True" : "Grounded: False";
+}
+function setDebugCollision(dir) {
+	if (dir) {
+		document.getElementById('lblDebugCollision').innerHTML = "Collision: " + dir;
+	}
+	else {
+		document.getElementById('lblDebugCollision').innerHTML = "Collision: null";
+	}
+}
+function setDebugVelocity(vX, vY) {
+	document.getElementById('lblDebugVelocityX').innerHTML = "Velocity X: " + vX;
+	document.getElementById('lblDebugVelocityY').innerHTML = "Velocity Y: " + vY;
+}
+function setDebugPos(x, y) {
+	document.getElementById('lblDebugPosX').innerHTML = "Position X: " + x;
+	document.getElementById('lblDebugPosY').innerHTML = "Position Y: " + y;
+}
+
+function checkStorageSupport() {
+  try {
+    return 'localStorage' in window && window['localStorage'] !== null;
+  } catch (e) {
+    return false;
+  }
+}
+
+document.body.addEventListener("keydown", function (e) {
+// U=85;
+// A=65; S=83; D=68; F=70; Enter=13;
+// Left=37; Down=40; Right=39; Up=38;
+//addDebugMessage(e.keyCode);
+	
+	// Enter: pause
+	if (e.keyCode === 13) {
+		if (paused === false) {
+			paused = true;
+			window.location.href = "#openModal";
+			//return; // v1
+		}
+		else {
+			paused = false;
+			window.location.href = "#close";
+			update();
+		}
+		return; // v2
+	}
+	
+	// U: manual update
+	if (e.keyCode === 85 && manualUpdate) {
+		update();
+		return;
+	}
+	
+	// Up: jump
+	if (e.keyCode == 38) {
+		if (keyUpReleased) {
+			keyUpPressed = true;
+			keyUpReleased = false;
+			keys[38] = true;
+		}
+	}
+	
+	// Every other key:
+	keys[e.keyCode] = true;
+	
+});
+
+document.body.addEventListener("keyup", function (e) {
+
+	if (e.keyCode == 38) {
+		keyUpReleased = true;
+		keys[e.keyCode] = false;
+	}
+	else {
+		keys[e.keyCode] = false;
+	}
+});
+
+window.addEventListener("load", function () {
+	if (manualUpdate === false) {
+        update();
+	}
+});
+
+var canvas = document.getElementById("canvas"),
+    ctx = canvas.getContext("2d"),
+    width = 500,
+    height = 200,
+	paused = false,
+	manualUpdate = false,
+    keys = [],
+	keyUpPressed = false,
+	keyUpReleased = true,
+	col = [],
+    friction = 0.25, // basic friction = 0.25; can't move = 0.0;
+    gravity = 0.25; // basic gravity = 0.25; can't jump = 0.0;
+	
+var player = {
+	x: 76,
+	y: 44,
+	width: 16,
+	height: 16,
+	speed: 3,
+	velX: 0,
+	velY: 0,
+	jumping: false,
+	grounded: false,
+	color: "white"
+};
+	
+var enemy = {
+	x: 240,
+	y: 93,
+	width: 16,
+	height: 16,
+	speed: 3,
+	velX: 0,
+	velY: 0,
+	jumping: false,
+	grounded: false,
+	color: "magenta"
+};
+
+// Create the border:
+var border = [];
+border.push({ x: 0, 		y: 0, 			width: 10, 		height: height });	// left border
+border.push({ x: 0, 		y: height-5, 	width: width, 	height: 10});		// bottom border
+border.push({ x: width-10, 	y: 0, 			width: 10, 		height: height});	// right border
+
+// Create the static platform(s):
+var boxes = [];
+boxes.push({ x: 80, 		y: 150, 		width: 94, 		height: 40});		// low left
+boxes.push({ x: 220, 		y: 110, 		width: 94, 		height: 40});		// middle
+boxes.push({ x: 80, 		y: 60,	 		width: 94, 		height: 40});		// high left
+
+// Create the platform(s):
+var platDir = 1, platAdd = 0, platforms = [];
+platforms.push({ x: 350, y: 150, width: 80, height: 10 });
+
+// Set the canvas dimensions:
+canvas.width = width;
+canvas.height = height;
+
+// Background - draw the sky:
+var skyGradient = ctx.createLinearGradient(0, 0, 0, 400);
+skyGradient.addColorStop(0, "#000044");
+skyGradient.addColorStop(1, "#0000FF");
+ctx.fillStyle = skyGradient;
+ctx.fillRect(0, 0, width, height);
+
+// Background - draw stars:
+ctx.fillStyle = "#ffffff";
+for (var i=0; i<200; i++) { 
+    var xCo = Math.floor(Math.random() * 500); //min 0 max 499
+	var yCo = Math.floor(Math.random() * 400); //min 0 max 399
+	ctx.fillRect(xCo, yCo, 1, 1);
+}
+
+// Draw land masses:
+drawBoxes(boxes);
+drawGrassOnBoxes(boxes);
+
+// Draw screen borders:
+drawBorders(border);
+
+// Background - draw and save:
+var base64 = canvas.toDataURL();
+canvas.style.backgroundImage = "url("+base64+")";
+
+function update() {
+
+	// ToDo:
+	// If I walk off a ledge, then hit Up, when I land I jump.
+
+	if (paused) {
+		return;
+	}
+
+	// Up arrow
+    if (keys[38]) {
+        if (!player.jumping && player.grounded && keyUpPressed) {
+            player.jumping = true;
+            player.grounded = false;
+            player.velY = -player.speed * 2;
+			keyUpPressed = false;
+        }
+    }
+	
+	// Right arrow
+    if (keys[39]) {
+        if (player.velX < player.speed) {
+            player.velX++;
+        }
+    }
+	
+	// Left arrow
+	if (keys[37]) {
+        if (player.velX > -player.speed) {
+            player.velX--;
+        }
+    }
+
+	// Enemy X & Y
+	if (enemy.velX > 0) {
+		enemy.velX -= friction;
+	}
+	else if (enemy.velX < 0) {
+		enemy.velX += friction;
+	}
+    if (enemy.grounded){
+        enemy.velY = 0;
+    }
+	else {
+		enemy.velY += gravity;
+	}
+    enemy.x += enemy.velX;
+    enemy.y += enemy.velY;
+	enemy.grounded = false;
+	
+	// Player X & Y
+	if (player.velX > 0) {
+		player.velX -= friction;
+	}
+	else if (player.velX < 0) {
+		player.velX += friction;
+	}
+    if (player.grounded){
+        player.velY = 0;
+    }
+	else {
+		player.velY += gravity;
+	}
+    player.x += player.velX;
+    player.y += player.velY;
+
+	// Ground the player before we do collision detection.
+	// Very important to fall after you walk off a ledge!
+	player.grounded = false;
+	
+	// Reset the player's color.  After we check for collisions, it will either be white still if no collisions
+	// took place, or will have been colored with the last collision.
+	player.color = "white";
+	
+	// Clear all previously drawn rectangles:
+    ctx.clearRect(0, 0, width, height);
+	
+	collisionCheckBoxes(border);
+	collisionCheckBoxes(boxes);
+	
+	movePlatforms(platforms, 350, 40);
+	
+	// Set debug values:
+	setDebugVelocity(player.velX, player.velY);
+	setDebugPos(player.x, player.y);
+	setDebugGrounded(player.grounded);
+	
+	drawEnemy();
+	
+	drawPlayer();
+	
+	var hiddenMe = false;
+	//hiddenMe = lineIntersectsBoxes(player.x, player.y, enemy.x, enemy.y, boxes);
+	hiddenMe = intBoxes(player, enemy, boxes);
+	setDebugEnemyCanSeeMe(hiddenMe);
+	
+	// Update to next frame:
+	if (!manualUpdate) {
+		//alert("manual");
+		requestAnimationFrame(update);
+	}
+}
+
+function setDebugEnemyCanSeeMe(hid) {
+	if (!hid) {
+		document.getElementById('lblDebugEnemyCanSeeMe').innerHTML = "ENEMY CAN SEE ME!!!!!!!";
+	}
+	else {
+		document.getElementById('lblDebugEnemyCanSeeMe').innerHTML = "...hidden...";
+	}
+}
+
+function intBoxes(who1, who2, bx) {
+
+	var hiddenMe = false;
+	
+	for (var i = 0; i < bx.length; i++) {
+		
+		// Box Top:
+		hiddenMe = hiddenMe || lineIntersect(who1.x, who1.y, who2.x, who2.y, 
+			bx[i].x, bx[i].y, bx[i].x + bx[i].width, bx[i].y);
+		
+		// Box Right:
+		hiddenMe = hiddenMe || lineIntersect(who1.x, who1.y, who2.x, who2.y, 
+			bx[i].x + bx[i].width, bx[i].y, bx[i].x + bx[i].width, bx[i].y + bx[i].height);
+		
+		// Box Bottom:
+		hiddenMe = hiddenMe || lineIntersect(who1.x, who1.y, who2.x, who2.y, 
+			bx[i].x, bx[i].y + bx[i].height, bx[i].x + bx[i].width, bx[i].y + bx[i].height);
+		
+		// Box Left:
+		hiddenMe = hiddenMe || lineIntersect(who1.x, who1.y, who2.x, who2.y, 
+			bx[i].x, bx[i].y, bx[i].x, bx[i].y + bx[i].height);
+	}
+	
+	return hiddenMe;
+}
+
+function lineIntersect(x1,y1,x2,y2, x3,y3,x4,y4) {
+    var x=((x1*y2-y1*x2)*(x3-x4)-(x1-x2)*(x3*y4-y3*x4))/((x1-x2)*(y3-y4)-(y1-y2)*(x3-x4));
+    var y=((x1*y2-y1*x2)*(y3-y4)-(y1-y2)*(x3*y4-y3*x4))/((x1-x2)*(y3-y4)-(y1-y2)*(x3-x4));
+    if (isNaN(x)||isNaN(y)) {
+        return false;
+    } else {
+        if (x1>=x2) {
+            if (!(x2<=x&&x<=x1)) {return false;}
+        } else {
+            if (!(x1<=x&&x<=x2)) {return false;}
+        }
+        if (y1>=y2) {
+            if (!(y2<=y&&y<=y1)) {return false;}
+        } else {
+            if (!(y1<=y&&y<=y2)) {return false;}
+        }
+        if (x3>=x4) {
+            if (!(x4<=x&&x<=x3)) {return false;}
+        } else {
+            if (!(x3<=x&&x<=x4)) {return false;}
+        }
+        if (y3>=y4) {
+            if (!(y4<=y&&y<=y3)) {return false;}
+        } else {
+            if (!(y3<=y&&y<=y4)) {return false;}
+        }
+    }
+    return true;
+}
+
+function lineIntersectsBoxes(x1, y1, x2, y2, theBoxes) {
+	// y = mx + b
+	// b = -mx + y
+	// (y - b)/m = x
+
+	var m = ((y2-y1) / (x2-x1));
+	var b = ((-m * x1) + y1);
+
+	for (var i = 0; i < theBoxes.length; i++) {
+		
+		var int1 = false;
+		var int2 = false;
+		var int3 = false;
+		var int4 = false;
+		
+		var debugInt = true;
+		
+		// side 1:
+		//var xf1 = (theBoxes[i].y - b) / m;
+		var xf1 = (theBoxes[i].y - b) / m;
+		if (y1 <= y2) {
+			if (x1 <= xf1 && xf1 <= x2) {
+				int1 = true;
+				if (debugInt) alert("1! xf1: " + xf1 + "; box x: " + theBoxes[i].x + "; box x + width: " + (theBoxes[i].x + theBoxes[i].width));
+				if (debugInt) manualUpdate = true;
+			}
+		}
+		else {
+			if (x2 <= xf1 && xf1 <= theBoxes[i].x + theBoxes[i].width) {
+				int1 = true;
+				if (debugInt) alert("1! xf1: " + xf1 + "; box x: " + theBoxes[i].x + "; box x + width: " + (theBoxes[i].x + theBoxes[i].width));
+				if (debugInt) manualUpdate = true;
+			}
+			
+		}
+		
+		// side 2:
+		var yf2 = (m * (theBoxes[i].x + theBoxes[i].height)) + b;
+		if ((theBoxes[i].y < yf2) && (yf2 < (theBoxes[i].y + theBoxes[i].height))) {
+			int2 = true;
+			if (debugInt) alert("2");
+			if (debugInt) manualUpdate = true;
+		}
+		
+		// side 3:
+		var xf3 = (theBoxes[i].y + theBoxes[i].height - b) / m;
+		if (theBoxes[i].x <= xf3 && xf3 <= theBoxes[i].x + theBoxes[i].width) {
+			int3 = true;
+			if (debugInt) alert("3");
+			if (debugInt) manualUpdate = true;
+		}
+	
+		// side 4:
+		var yf4 = (m * theBoxes[i].x) + b;
+		if ((theBoxes[i].y < yf4) && (yf4 < (theBoxes[i].y + theBoxes[i].height)) && (yf4 < y1)) {
+			int4 = true;
+			if (debugInt) alert("4! yf4: " + yf4 + "; box y: " + theBoxes[i].y + "; box y + h: " + (theBoxes[i].y + theBoxes[i].height));
+			if (debugInt) manualUpdate = true;
+		}
+		
+		if (int1 || int2 || int3 || int4) {
+			return false;
+		}
+		
+	}
+	
+	return true;
+}
+
+function drawPlayer() {
+    ctx.fillStyle = player.color;
+	ctx.fillRect(player.x, player.y, player.width, player.height);
+}
+
+function drawEnemy() {
+    ctx.fillStyle = enemy.color;
+	ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
+}
+
+function drawGrassOnBoxes(theBoxes) {
+
+    for (var i = 0; i < theBoxes.length; i++) {
+
+		ctx.fillStyle = "#007700";
+        ctx.fillRect(theBoxes[i].x, theBoxes[i].y, theBoxes[i].width, 5);
+
+		ctx.fillStyle = "#008800";
+        ctx.fillRect(theBoxes[i].x, theBoxes[i].y + 5, theBoxes[i].width, 5);
+
+		ctx.fillStyle = "#009900";
+        ctx.fillRect(theBoxes[i].x, theBoxes[i].y + 10, theBoxes[i].width, 5);
+	
+		var lineH = 2;
+		
+		// Set the style properties.
+		ctx.fillStyle = '#00BB00';
+		ctx.strokeStyle = '#00AA00';
+		ctx.lineWidth = lineH;
+		
+		for (var j = 0; j < theBoxes[i].width - 10; j = j + 10) {
+			ctx.beginPath();
+			
+			ctx.moveTo(theBoxes[i].x + lineH + j, theBoxes[i].y + lineH); // give the (x,y) coordinates
+			ctx.lineTo(theBoxes[i].x + lineH + j + 10, theBoxes[i].y + lineH);
+			ctx.lineTo(theBoxes[i].x + lineH + j + 5, theBoxes[i].y + lineH + 10);
+			ctx.lineTo(theBoxes[i].x + lineH + j, theBoxes[i].y + lineH);
+			
+			ctx.fill();
+			ctx.stroke();
+		}
+    }
+}
+
+function drawBorders(theBoxes) {
+	ctx.fillStyle = "#000000";
+    for (var i = 0; i < theBoxes.length; i++) {
+        //ctx.fillRect(theBoxes[i].x.toFixed(2), theBoxes[i].y.toFixed(2), theBoxes[i].width.toFixed(2), theBoxes[i].height.toFixed(2));
+		ctx.fillRect(theBoxes[i].x, theBoxes[i].y, theBoxes[i].width, theBoxes[i].height);
+    }
+}
+
+function drawBoxes(theBoxes) {
+	var gradEarth = ctx.createLinearGradient(0,170,0,0);
+	gradEarth.addColorStop(0, "#663300");
+	gradEarth.addColorStop(1, "#000000");
+	ctx.fillStyle = gradEarth;
+    for (var i = 0; i < theBoxes.length; i++) {
+		ctx.fillRect(theBoxes[i].x, theBoxes[i].y, theBoxes[i].width, theBoxes[i].height);
+    }
+}
+
+function collisionCheckBoxes(theBoxes) {
+    for (var i = 0; i < theBoxes.length; i++) {
+        var dir = colCheck(player, theBoxes[i]);
+		groundPlayer(dir, 0);
+		
+		var eDir = colCheck(enemy, theBoxes[i]);
+		groundEnemy(eDir, 0);
+    }
+}
+
+function movePlatforms(theBoxes, start, maxH) {
+	ctx.fillStyle = "#994C00";
+    for (var i = 0; i < theBoxes.length; i++) {
+		theBoxes[i].x += platDir;
+		
+        ctx.fillRect(theBoxes[i].x, theBoxes[i].y, theBoxes[i].width, theBoxes[i].height);
+		
+        var dir = colCheck(player, theBoxes[i]);
+		groundPlayer(dir, platDir);
+		
+        var eDir = colCheck(enemy, theBoxes[i]);
+		groundEnemy(eDir, platDir);
+		
+		if (theBoxes[i].x === start + maxH) {
+			platDir *= -1;
+		} else if (theBoxes[i].x === start) {
+			platDir *= -1;
+		}
+    }
+}
+
+function groundPlayer(dir, xDiff) {
+	if (dir !== null) {
+		if (dir === "t") {
+			// Collision with my TOP:
+			player.velY *= -1;
+			player.jumping = false;
+			player.color = "yellow";
+		}
+		else if (dir === "r") {
+			// Collision with my RIGHT:
+			player.velX = 0;
+			player.jumping = false;
+			player.color = "orange";
+		} else if (dir === "b") {
+			// Collision with my BOTTOM:
+			player.x += xDiff;
+			player.grounded = true;
+			player.jumping = false;
+			player.color = "red";
+		} else if (dir === "l") {
+			// Collision with my LEFT:
+			player.velX = 0;
+			player.jumping = false;
+			player.color = "purple";
+		} else {
+			player.color = "green";
+		}
+	}
+}
+
+function groundEnemy(dir, xDiff) {
+	if (dir !== null) {
+		if (dir === "t") {
+			enemy.velY *= -1;
+			enemy.jumping = false;
+		}
+		else if (dir === "r") {
+			enemy.velX = 0;
+			enemy.jumping = false;
+		} else if (dir === "b") {
+			enemy.x += xDiff;
+			enemy.grounded = true;
+			enemy.jumping = false;
+		} else if (dir === "l") {
+			enemy.velX = 0;
+			enemy.jumping = false;
+		}
+	}
+}
+
+function colCheck(shapeA, shapeB) {
+	
+    // Get the midpoint coordinates:
+	var midXA = shapeA.x + (shapeA.width / 2);
+	var midXB = shapeB.x + (shapeB.width / 2);
+	var midYA = shapeA.y + (shapeA.height / 2);
+	var midYB = shapeB.y + (shapeB.height / 2);
+	
+    // Get the vectors to check against:
+    var vX = (midXA - midXB);
+    var vY = (midYA - midYB);
+	
+	// Add the half widths and half heights of the objects
+    var hWidths = (shapeA.width / 2) + (shapeB.width / 2);
+    var hHeights = (shapeA.height / 2) + (shapeB.height / 2);
+	
+	vX = vX.toFixed(2);
+	vY = vY.toFixed(2);
+	hWidths = hWidths.toFixed(2);
+	hHeights = hHeights.toFixed(2);
+	
+    var colDir = null;
+
+	setDebugCollision(colDir);
+	
+    // If the x and y vector are less than the half width or half height, 
+	// they we must be inside the object, causing a collision
+    if (Math.abs(vX) <= hWidths && Math.abs(vY) <= hHeights) {
+        // figures out on which side we are colliding (top, bottom, left, or right)
+        var oX = hWidths - Math.abs(vX),
+            oY = hHeights - Math.abs(vY);
+        if (oX >= oY) {
+            if (vY > 0) {
+                colDir = "t";
+                shapeA.y += oY;
+            } else {
+                colDir = "b";
+                shapeA.y -= oY;
+            }
+        } else {
+            if (vX > 0) {
+                colDir = "l";
+                shapeA.x += oX;
+            } else {
+                colDir = "r";
+                shapeA.x -= oX;
+            }
+        }
+	
+		setDebugCollision(colDir);
+    }
+	
+    return colDir;
+}
+
+function LinesIntersect(l1p1, l1p2, l2p1, l2p2) {
+	var q = (l1p1.Y - l2p1.Y) * (l2p2.X - l2p1.X) - (l1p1.X - l2p1.X) * (l2p2.Y - l2p1.Y);
+	var d = (l1p2.X - l1p1.X) * (l2p2.Y - l2p1.Y) - (l1p2.Y - l1p1.Y) * (l2p2.X - l2p1.X);
+
+	if( d == 0 )
+	{
+		return false;
+	}
+
+	var r = q / d;
+
+	q = (l1p1.Y - l2p1.Y) * (l1p2.X - l1p1.X) - (l1p1.X - l2p1.X) * (l1p2.Y - l1p1.Y);
+	var s = q / d;
+
+	if( r < 0 || r > 1 || s < 0 || s > 1 )
+	{
+		return false;
+	}
+
+	return true;
+}
+
+function getClosestJump(who, theBoxes) {
+    for (var i = 0; i < theBoxes.length; i++) {
+		if (canMakeJump(who, theBoxes[i].x, theBoxes[i].y)) {
+			return i;
+		}
+	}
+}
+
+function canMakeJump(who, x2, y2) {
+	var x1 = who.x,
+		y1 = who.y,
+		h = who.height,
+		w = who.width;
+	
+	
+	
+	return false;
+}
+
+</script>
+</body>
+</html>
